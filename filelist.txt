@@ -1,0 +1,2 @@
+https://github.com/KhronosGroup/glTF-Sample-Assets/raw/refs/heads/main/Models/BoomBox/glTF-Binary/BoomBox.glb
+https://github.com/KhronosGroup/glTF-Sample-Assets/raw/refs/heads/main/Models/Avocado/glTF-Binary/Avocado.glb
