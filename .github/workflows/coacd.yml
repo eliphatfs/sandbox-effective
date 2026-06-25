@@ -1,0 +1,121 @@
+name: CoACD GLB Processing
+
+on:
+workflow_dispatch:
+push:
+paths:
+- "filelist.txt"
+- "scripts/process_models.py"
+- ".github/workflows/coacd.yml"
+pull_request:
+paths:
+- "filelist.txt"
+- "scripts/process_models.py"
+- ".github/workflows/coacd.yml"
+
+jobs:
+coacd:
+name: Convert GLB Y-up to Z-up and run CoACD
+runs-on: ubuntu-latest
+timeout-minutes: 45
+
+```
+steps:
+  - name: Checkout
+    uses: actions/checkout@v4
+
+  - name: Set up Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: "3.11"
+      cache: "pip"
+
+  - name: Install dependencies
+    run: |
+      python -m pip install --upgrade pip
+      python -m pip install numpy trimesh coacd
+
+  - name: Show filelist
+    run: |
+      echo "filelist.txt:"
+      cat filelist.txt
+
+  - name: Validate Y-up to Z-up transform
+    run: |
+      python scripts/process_models.py --self-test
+
+  - name: Download, convert, and run CoACD
+    run: |
+      python scripts/process_models.py \
+        --filelist filelist.txt \
+        --out coacd_outputs
+
+  - name: Validate outputs
+    run: |
+      python - <<'PY'
+      import json
+      from pathlib import Path
+
+      root = Path("coacd_outputs")
+      summary_path = root / "summary.json"
+
+      assert root.exists(), "missing coacd_outputs directory"
+      assert summary_path.exists(), "missing coacd_outputs/summary.json"
+
+      summary = json.loads(summary_path.read_text())
+      assert "num_models" in summary, "summary.json missing num_models"
+      assert "models" in summary, "summary.json missing models"
+      assert summary["num_models"] == len(summary["models"]), (
+          f"num_models mismatch: {summary['num_models']} vs {len(summary['models'])}"
+      )
+      assert summary["num_models"] > 0, "no models processed"
+
+      for model in summary["models"]:
+          name = model["name"]
+          model_dir = root / name
+
+          assert model_dir.exists(), f"{name}: missing output directory"
+          assert (model_dir / "source.glb").exists(), f"{name}: missing source.glb"
+          assert (model_dir / "converted_zup.obj").exists(), f"{name}: missing converted_zup.obj"
+          assert (model_dir / "manifest.json").exists(), f"{name}: missing manifest.json"
+
+          num_parts = model.get("num_parts", 0)
+          assert num_parts > 0, f"{name}: CoACD produced no parts"
+
+          for i in range(num_parts):
+              part_path = model_dir / f"part_{i:03d}.obj"
+              assert part_path.exists(), f"{name}: missing {part_path.name}"
+              assert part_path.stat().st_size > 0, f"{name}: empty {part_path.name}"
+
+          manifest = json.loads((model_dir / "manifest.json").read_text())
+          assert manifest["num_parts"] == num_parts, (
+              f"{name}: manifest num_parts mismatch"
+          )
+          assert manifest["num_vertices"] > 0, f"{name}: invalid num_vertices"
+          assert manifest["num_faces"] > 0, f"{name}: invalid num_faces"
+
+          transform = manifest.get("axis_transform", {})
+          desc = transform.get("description", "")
+          assert "Y-up to Z-up" in desc, f"{name}: missing axis transform description"
+
+          print(
+              f"{name}: validated {num_parts} CoACD parts, "
+              f"{manifest['num_vertices']} vertices, {manifest['num_faces']} faces"
+          )
+
+      print("Output validation passed")
+      PY
+
+  - name: Show output tree
+    if: always()
+    run: |
+      find coacd_outputs -maxdepth 3 -type f | sort || true
+
+  - name: Upload CoACD results
+    uses: actions/upload-artifact@v4
+    with:
+      name: coacd-results
+      path: coacd_outputs/
+      if-no-files-found: error
+```
+
